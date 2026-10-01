@@ -45,6 +45,14 @@ const API = {
       body: JSON.stringify({ version, fields })
     }));
   },
+  // 多视野合并统计（只读；草稿按当前数据实时计算，报告只读发布时冻结数据）
+  async draftMergeStats(id, fieldIds) {
+    return jsonOrThrow(await fetch(`/api/images/${id}/merge-stats`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fieldIds })
+    }));
+  },
   // 细胞迁移：预览（同一变换与校验，不写入）与确认（携带预览时读取的目标草稿版本）
   async previewMigration(id, payload) {
     return jsonOrThrow(await fetch(`/api/images/${id}/migrate/preview`, {
@@ -72,6 +80,13 @@ const API = {
   },
   async getReport(id) {
     return jsonOrThrow(await fetch(`/api/reports/${id}`));
+  },
+  async reportMergeStats(id, fieldIds) {
+    return jsonOrThrow(await fetch(`/api/reports/${id}/merge-stats`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fieldIds })
+    }));
   },
   exportCsvUrl(id) { return `/api/reports/${id}/csv`; },
   exportFieldCsvUrl(id) { return `/api/reports/${id}/field-csv`; },

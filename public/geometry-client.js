@@ -281,10 +281,215 @@ function clientMeasure(cells, scale) {
   });
 }
 
+// ---------- 多视野合并统计（与服务端 server/merge.js 同算法） ----------
+// 按所选视野净区域（外环扣除孔洞）的几何并集：slab 积分精确面积 +
+// 细胞净区域质心严格位于并集内部才计入（同一细胞只计一次）。
+
+const MERGE_EPS = 1e-7;
+
+function mgEdges(poly) {
+  const e = [];
+  for (let i = 0; i < poly.length; i++) e.push([poly[i], poly[(i + 1) % poly.length]]);
+  return e;
+}
+
+// 两线段在各自边内部相交的交点 x（端点/共线返回 null）
+function mgCrossingX(a, b, c, d) {
+  const den = (b.x - a.x) * (d.y - c.y) - (b.y - a.y) * (d.x - c.x);
+  if (Math.abs(den) <= GEOM_EPS) return null;
+  const t = ((c.x - a.x) * (d.y - c.y) - (c.y - a.y) * (d.x - c.x)) / den;
+  const u = ((c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)) / den;
+  if (t <= GEOM_EPS || t >= 1 - GEOM_EPS || u <= GEOM_EPS || u >= 1 - GEOM_EPS) return null;
+  return a.x + t * (b.x - a.x);
+}
+
+function mgBreakpoints(fields) {
+  const rings = [];
+  fields.forEach((f) => { rings.push(f.outer); (f.holes || []).forEach((h) => rings.push(h)); });
+  const xs = [];
+  rings.forEach((r) => r.forEach((p) => xs.push(p.x)));
+  for (let i = 0; i < rings.length; i++) {
+    for (let j = i + 1; j < rings.length; j++) {
+      for (const [a, b] of mgEdges(rings[i])) {
+        for (const [c, d] of mgEdges(rings[j])) {
+          const x = mgCrossingX(a, b, c, d);
+          if (x !== null) xs.push(x);
+        }
+      }
+    }
+  }
+  xs.sort((p, q) => p - q);
+  const uniq = [];
+  for (const x of xs) {
+    if (!uniq.length || Math.abs(x - uniq[uniq.length - 1]) > GEOM_EPS) uniq.push(x);
+  }
+  return uniq;
+}
+
+function mgRingSections(ring, x) {
+  const ys = [];
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i], b = ring[(i + 1) % ring.length];
+    const minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x);
+    if (!(x > minX + GEOM_EPS && x < maxX - GEOM_EPS)) continue;
+    const t = (x - a.x) / (b.x - a.x);
+    ys.push(a.y + t * (b.y - a.y));
+  }
+  ys.sort((p, q) => p - q);
+  const dedup = [];
+  for (const y of ys) {
+    if (!dedup.length || Math.abs(y - dedup[dedup.length - 1]) > GEOM_EPS) dedup.push(y);
+  }
+  const secs = [];
+  for (let i = 0; i + 1 < dedup.length; i += 2) secs.push([dedup[i], dedup[i + 1]]);
+  return secs;
+}
+
+function mgSubtractOne(list, hole) {
+  const hlo = hole[0], hhi = hole[1];
+  const out = [];
+  for (const seg of list) {
+    const lo = seg[0], hi = seg[1];
+    if (hhi - lo <= MERGE_EPS || hlo - hi >= -MERGE_EPS) { out.push([lo, hi]); continue; }
+    if (hlo - lo > MERGE_EPS) out.push([lo, Math.min(hi, hlo)]);
+    if (hi - hhi > MERGE_EPS) out.push([Math.max(lo, hhi), hi]);
+  }
+  return out;
+}
+
+function mgFieldSections(field, x) {
+  let secs = mgRingSections(field.outer, x);
+  for (const h of field.holes || []) {
+    for (const hs of mgRingSections(h, x)) secs = mgSubtractOne(secs, hs);
+  }
+  return secs;
+}
+
+function mgMergeSections(secs) {
+  const sorted = secs
+    .filter((s) => s[1] - s[0] > MERGE_EPS)
+    .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+  const out = [];
+  for (const s of sorted) {
+    if (!out.length) { out.push([s[0], s[1]]); continue; }
+    const last = out[out.length - 1];
+    if (s[0] <= last[1] + MERGE_EPS) {
+      if (s[1] > last[1]) last[1] = s[1];
+    } else {
+      out.push([s[0], s[1]]);
+    }
+  }
+  return out;
+}
+
+function gUnionAreaPx(fields) {
+  const xs = mgBreakpoints(fields);
+  let area = 0;
+  for (let k = 0; k + 1 < xs.length; k++) {
+    const x0 = xs[k], x1 = xs[k + 1];
+    if (x1 - x0 <= GEOM_EPS) continue;
+    const xm = (x0 + x1) / 2;
+    let secs = [];
+    fields.forEach((f) => { secs = secs.concat(mgFieldSections(f, xm)); });
+    secs = mgMergeSections(secs);
+    let len = 0;
+    secs.forEach((s) => { len += s[1] - s[0]; });
+    area += (x1 - x0) * len;
+  }
+  return Math.abs(area);
+}
+
+// 点严格位于所选视野净区域并集内部
+function gPointInUnionNet(p, fields) {
+  for (const f of fields) {
+    if (!gPointStrictlyInside(p, f.outer)) continue;
+    let inHole = false;
+    for (const h of f.holes || []) {
+      if (gPointInsideOrOn(p, h)) { inHole = true; break; }
+    }
+    if (!inHole) return true;
+  }
+  return false;
+}
+
+// 选择校验：返回 null（通过）或错误信息字符串
+function clientMergeValidate(fields, fieldIds) {
+  if (!Array.isArray(fieldIds)) return '合并统计请求无效：fieldIds 必须是视野标识数组';
+  if (fieldIds.length < 2) {
+    return `合并统计至少选择 2 个取样视野（当前选择 ${fieldIds.length} 个），请求被拒绝`;
+  }
+  const seen = new Set();
+  for (const id of fieldIds) {
+    if (typeof id !== 'string' || !id) return '合并统计请求无效：视野标识必须是非空字符串';
+    if (seen.has(id)) return `合并统计被拒绝：视野标识「${id}」重复，同一视野只能选择一次`;
+    seen.add(id);
+  }
+  const byId = new Map((fields || []).map((f) => [f.id, f]));
+  for (const id of fieldIds) {
+    if (!byId.has(id)) {
+      return `合并统计被拒绝：所选视野「${id}」不存在（可能已被删除或重画，请刷新后重新选择）`;
+    }
+  }
+  return null;
+}
+
+// 多视野合并实时统计；返回 { error } 或统计对象（字段与服务端一致）
+function clientMergeStats(fields, cells, scale, fieldIds) {
+  const err = clientMergeValidate(fields, fieldIds);
+  if (err) return { error: err };
+  const all = fields || [];
+  const byId = new Map();
+  all.forEach((f, i) => { if (!byId.has(f.id)) byId.set(f.id, { field: f, index: i }); });
+  const selected = fieldIds.map((id) => byId.get(id));
+  const selFields = selected.map((x) => x.field);
+
+  const centroids = (cells || []).map((c) => {
+    try { return gNetCentroid(c.outer, c.holes); } catch { return null; }
+  });
+  const keySet = new Set();
+  const counted = [];
+  (cells || []).forEach((cell, ci) => {
+    const ctr = centroids[ci];
+    if (!ctr) return;
+    if (gPointInUnionNet(ctr, selFields)) {
+      const key = cell.id || `#${ci}`;
+      if (keySet.has(key)) return;
+      keySet.add(key);
+      counted.push({ cell, ci, key, areaPx: ctr.areaPx });
+    }
+  });
+
+  const areaPx = gUnionAreaPx(selFields);
+  const countedAreaPx = counted.reduce((s, x) => s + x.areaPx, 0);
+  const calibrated = typeof scale === 'number' && Number.isFinite(scale) && scale > 0;
+  const areaMm2 = calibrated ? areaPx * scale * scale / 1e6 : null;
+  const countedMm2 = calibrated ? countedAreaPx * scale * scale / 1e6 : null;
+  const density = calibrated && areaMm2 > 0 ? counted.length / areaMm2 : null;
+  const nameOf = (f, i) => (f.name && f.name.trim()) || `视野 ${i + 1}`;
+  const round6 = (v) => Math.round(v * 1e6) / 1e6;
+  const round4 = (v) => Math.round(v * 1e4) / 1e4;
+  return {
+    fieldCount: selected.length,
+    fieldIds: selFields.map((f) => f.id),
+    fieldNames: selected.map((x) => nameOf(x.field, x.index)),
+    cellCount: counted.length,
+    countedCellKeys: counted.map((x) => x.key),
+    areaMm2,
+    densityPerMm2: density,
+    countedCellAreaMm2: countedMm2,
+    areaText: calibrated ? String(round6(areaMm2)) : '待定标',
+    densityText: calibrated ? String(round4(density)) : '待定标',
+    countedCellAreaText: calibrated ? String(round6(countedMm2)) : '待定标',
+    calibrated
+  };
+}
+
 window.ClientGeom = {
   clientValidate, clientMeasure,
   clientValidateFields, clientFieldStats,
+  clientMergeValidate, clientMergeStats,
   gArea, gPerimeter, gSelfIntersection, gPointStrictlyInside,
   gRingStrictlyInside, gEdges, gSegsTouch, gDupPoint,
-  gPointInsideOrOn, gNetCentroid, gPointInFieldNet
+  gPointInsideOrOn, gNetCentroid, gPointInFieldNet,
+  gUnionAreaPx, gPointInUnionNet
 };

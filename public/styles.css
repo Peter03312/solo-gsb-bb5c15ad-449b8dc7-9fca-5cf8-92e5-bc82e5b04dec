@@ -179,6 +179,16 @@ table.measure tr:nth-child(even) td { background: rgba(255,255,255,.02); }
 table.measure.compact { font-size: 11px; white-space: nowrap; }
 table.measure.compact th, table.measure.compact td { padding: 4px 6px; }
 
+/* 多视野合并统计：勾选列表 + 结果表横向滚动 */
+#merge-pick-wrap, #rp-merge-pick-wrap {
+  display: flex; flex-direction: column; gap: 6px; margin: 8px 0;
+}
+#merge-pick-wrap .cell-row, #rp-merge-pick-wrap .cell-row { cursor: pointer; }
+#merge-pick-wrap input[type=checkbox], #rp-merge-pick-wrap input[type=checkbox] {
+  transform: scale(1.2); flex: none;
+}
+#merge-result-wrap, #rp-merge-result-wrap { overflow-x: auto; }
+
 /* 复选框列表项 */
 .item label.main { display: flex; align-items: center; gap: 14px; flex: 1; cursor: pointer; min-width: 0; }
 .item input[type=checkbox] { transform: scale(1.25); }

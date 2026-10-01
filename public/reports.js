@@ -6,6 +6,8 @@ const Reports = {
   reports: [],
   selected: new Set(),
   detailView: null,
+  detailReport: null,    // 当前查看的冻结报告
+  mergeSelected: [],    // 报告详情中勾选的合并视野 id
 
   async showList() {
     document.getElementById('view-reports').classList.remove('hidden');
@@ -99,6 +101,8 @@ const Reports = {
     document.getElementById('view-reports').classList.add('hidden');
     document.getElementById('view-report-detail').classList.remove('hidden');
     const r = await API.getReport(id);
+    this.detailReport = r;
+    this.mergeSelected = [];
 
     document.getElementById('rp-title').textContent = r.title;
     document.getElementById('rp-meta').innerHTML =
@@ -149,6 +153,8 @@ const Reports = {
         <p class="hint">发布时冻结，不随后续草稿变化；与「视野统计 CSV」为同一份结果。</p>`;
     }
 
+    this.renderMergePanel();
+
     document.getElementById('rp-png-link').href = API.exportPngUrl(r.id);
     document.getElementById('rp-png-link').setAttribute('download', `${r.id}_annotated.png`);
     document.getElementById('rp-csv-link').href = API.exportCsvUrl(r.id);
@@ -170,6 +176,77 @@ const Reports = {
 
   hideDetail() {
     if (this.detailView) this.detailView.destroy(), (this.detailView = null);
+    this.detailReport = null;
+    this.mergeSelected = [];
+  },
+
+  // ---------- 多视野合并统计（只读冻结数据，本地按同一算法计算） ----------
+
+  toggleMergeField(id) {
+    if (this.mergeSelected.includes(id)) {
+      this.mergeSelected = this.mergeSelected.filter((x) => x !== id);
+    } else {
+      this.mergeSelected = this.mergeSelected.concat(id);
+    }
+    this.renderMergePanel();
+  },
+
+  renderMergePanel() {
+    const pick = document.getElementById('rp-merge-pick-wrap');
+    if (!pick || !this.detailReport) return;
+    const r = this.detailReport;
+    const fields = r.fields || [];
+    this.mergeSelected = this.mergeSelected.filter((id) => fields.some((f) => f.id === id));
+    pick.innerHTML = '';
+    if (!fields.length) {
+      pick.innerHTML = '<p class="hint">本报告发布时未圈定取样视野，无法合并统计。</p>';
+      document.getElementById('rp-merge-result-wrap').innerHTML = '';
+      return;
+    }
+    fields.forEach((f, i) => {
+      const row = document.createElement('label');
+      row.className = 'cell-row';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = this.mergeSelected.includes(f.id);
+      cb.onchange = () => this.toggleMergeField(f.id);
+      row.appendChild(cb);
+      const name = document.createElement('span');
+      const label = (f.name && f.name.trim()) || `视野 ${i + 1}`;
+      name.innerHTML = `<span class="swatch" style="background:#ffd400"></span>${label}`;
+      row.appendChild(name);
+      pick.appendChild(row);
+    });
+
+    const wrap = document.getElementById('rp-merge-result-wrap');
+    const n = this.mergeSelected.length;
+    if (n < 2) {
+      wrap.innerHTML = `<p class="hint">已选 ${n} 个视野——请至少勾选 <b>2</b> 个同一报告内的视野查看并集合并统计。</p>`;
+      return;
+    }
+    const scale = r.calib ? r.calib.scale : null;
+    const s = window.ClientGeom.clientMergeStats(fields, r.cells, scale, this.mergeSelected);
+    if (s.error) {
+      wrap.innerHTML = `<p class="hint" style="color:var(--danger)">${s.error}</p>`;
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="measure compact">
+        <thead><tr>
+          <th>合并视野（${s.fieldCount}）</th><th>并集净面积 mm²</th><th>细胞数</th>
+          <th>细胞密度 个/mm²</th><th>计入细胞净面积总和 mm²</th>
+        </tr></thead>
+        <tbody><tr>
+          <td>${s.fieldNames.map((x) => `● ${x}`).join('、')}</td>
+          <td>${s.areaText}</td>
+          <td><b>${s.cellCount}</b></td>
+          <td>${s.densityText}</td>
+          <td>${s.countedCellAreaText}</td>
+        </tr></tbody>
+      </table>
+      <p class="hint">结果只取本报告<b>发布时冻结</b>的视野、细胞与标尺；面积按视野净区域（外环扣除孔洞）的
+      <b>几何并集</b>计算，重叠部分只计一次；细胞以净区域质心判定，严格位于并集内部才计入，
+      同一细胞只计一次，落在并集外边界上不计入。</p>`;
   },
 
   fmt(v) {

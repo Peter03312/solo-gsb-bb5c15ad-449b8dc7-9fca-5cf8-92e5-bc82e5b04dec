@@ -37,6 +37,7 @@ const Editor = {
   calibDraft: null,    // [p1] 等待第二点
   activeCellId: null,
   activeFieldId: null,
+  mergeSelected: [],   // 多视野合并统计中勾选的视野 id（同一草稿内）
   view: null,
   tool: 'cell',
   migrate: null,       // 细胞迁移工作状态（见 resetMigration）
@@ -94,6 +95,8 @@ const Editor = {
     this.calibDraft = null;
     if (!this.cells.some((c) => c.id === this.activeCellId)) this.activeCellId = null;
     if (!this.fields.some((f) => f.id === this.activeFieldId)) this.activeFieldId = null;
+    // 已被删除的视野自动从合并选择中移除
+    this.mergeSelected = this.mergeSelected.filter((id) => this.fields.some((f) => f.id === id));
     if (this.view) this.view.render();
   },
 
@@ -874,8 +877,75 @@ const Editor = {
     document.getElementById('save-fields').disabled = !this.fieldsDirty;
     document.getElementById('tool-hole').disabled = !this.activeCellId;
     document.getElementById('tool-fieldhole').disabled = !this.activeFieldId;
+    this.renderMergePanel(c ? c.scale : null);
     this.renderMigratePanel();
     this.renderDraftInfo();
+  },
+
+  // ---------- 多视野合并统计（当前工作副本实时计算） ----------
+
+  toggleMergeField(id) {
+    if (this.mergeSelected.includes(id)) {
+      this.mergeSelected = this.mergeSelected.filter((x) => x !== id);
+    } else {
+      this.mergeSelected = this.mergeSelected.concat(id);
+    }
+    this.renderMergePanel(this.img.calib ? this.img.calib.scale : null);
+  },
+
+  renderMergePanel(scale) {
+    const pick = document.getElementById('merge-pick-wrap');
+    if (!pick) return;
+    this.mergeSelected = this.mergeSelected.filter((id) => this.fields.some((f) => f.id === id));
+    pick.innerHTML = '';
+    if (!this.fields.length) {
+      pick.innerHTML = '<p class="hint">尚无取样视野，无法合并统计。</p>';
+    } else {
+      this.fields.forEach((field, i) => {
+        const row = document.createElement('label');
+        row.className = 'cell-row';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = this.mergeSelected.includes(field.id);
+        cb.onchange = () => this.toggleMergeField(field.id);
+        row.appendChild(cb);
+        const name = document.createElement('span');
+        name.innerHTML = `<span class="swatch" style="background:${FIELD_COLOR}"></span>${field.name || `视野 ${i + 1}`}`;
+        row.appendChild(name);
+        pick.appendChild(row);
+      });
+    }
+
+    const wrap = document.getElementById('merge-result-wrap');
+    const n = this.mergeSelected.length;
+    if (n < 2) {
+      wrap.innerHTML = `<p class="hint">已选 ${n} 个视野——请至少勾选 <b>2</b> 个同一草稿内的视野查看并集合并统计。</p>`;
+      return;
+    }
+    const s = window.ClientGeom.clientMergeStats(this.fields, this.cells, scale, this.mergeSelected);
+    if (s.error) {
+      wrap.innerHTML = `<p class="hint" style="color:var(--danger)">${s.error}</p>`;
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="measure compact">
+        <thead><tr>
+          <th>合并视野（${s.fieldCount}）</th><th>并集净面积 mm²</th><th>细胞数</th>
+          <th>细胞密度 个/mm²</th><th>计入细胞净面积总和 mm²</th>
+        </tr></thead>
+        <tbody><tr>
+          <td>${s.fieldNames.map((x) => `● ${x}`).join('、')}</td>
+          <td>${s.areaText}</td>
+          <td><b>${s.cellCount}</b></td>
+          <td>${s.densityText}</td>
+          <td>${s.countedCellAreaText}</td>
+        </tr></tbody>
+      </table>
+      <p class="hint">面积按所选视野净区域（外环扣除孔洞）的<b>几何并集</b>计算，重叠部分只计一次；
+      细胞以净区域质心判定，严格位于并集内部才计入，同一细胞只计一次，落在并集外边界上不计入；
+      落在某视野孔洞内但处于另一视野净区域中的细胞仍计入。
+      ${this.fieldsDirty || this.dirty ? '当前为<b>未保存改动</b>的实时结果，保存后以服务端按当前数据重算的结果为准。' : ''}
+      ${scale ? '' : '当前<b>未定标</b>：面积、密度与总和显示“待定标”，细胞数保留。'}</p>`;
   },
 
   toast(msg, ok = false) {

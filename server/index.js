@@ -11,6 +11,7 @@ const { initDb } = require('./db');
 const geo = require('./geometry');
 const cmp = require('./compare');
 const fieldsSvc = require('./fields');
+const mergeSvc = require('./merge');
 const transfer = require('./transfer');
 const { renderAnnotatedPng } = require('./render');
 const { buildReportCsv, buildCombinedCsv, buildComparisonCsv, buildFieldStatsCsv, streamZip } = require('./exporter');
@@ -387,6 +388,26 @@ app.put('/api/images/:id/fields', (req, res) => {
   res.json(getImageOr404(img.id));
 });
 
+// ---------- 多视野合并统计（只读：按当前草稿数据实时计算，不写入任何内容） ----------
+// 同一草稿内至少两个视野净区域的几何并集；选择不足/标识重复/不存在 → 400。
+
+app.post('/api/images/:id/merge-stats', (req, res) => {
+  const img = getImageOr404(req.params.id);
+  if (!img) return res.status(404).json({ error: '图片不存在' });
+  const stats = mergeSvc.buildMergeStats(img.fields, img.cells,
+    img.calib ? img.calib.scale : null, (req.body || {}).fieldIds);
+  if (stats.error) return badRequest(res, stats.error);
+  res.json({
+    scope: 'draft',
+    imageId: img.id,
+    imageVersion: img.version,
+    width: img.width,
+    height: img.height,
+    calibrated: !!img.calib,
+    stats
+  });
+});
+
 // ---------- 发布（乐观并发：携带读取时草稿版本） ----------
 
 app.post('/api/images/:id/publish', (req, res) => {
@@ -451,6 +472,25 @@ app.get('/api/reports/:id', (req, res) => {
   const report = getReportOr404(req.params.id);
   if (!report) return res.status(404).json({ error: '报告不存在' });
   res.json(report);
+});
+
+// 多视野合并统计（只读）：只读取发布时冻结的 fields/cells/calib，草稿后续变化不影响结果
+app.post('/api/reports/:id/merge-stats', (req, res) => {
+  const report = getReportOr404(req.params.id);
+  if (!report) return res.status(404).json({ error: '报告不存在' });
+  const stats = mergeSvc.buildMergeStats(report.fields, report.cells,
+    report.calib ? report.calib.scale : null, (req.body || {}).fieldIds);
+  if (stats.error) return badRequest(res, stats.error);
+  res.json({
+    scope: 'report',
+    reportId: report.id,
+    title: report.title,
+    draftVersion: report.draftVersion,
+    width: report.width,
+    height: report.height,
+    calibrated: true,
+    stats
+  });
 });
 
 app.get('/api/reports/:id/file', (req, res) => {
