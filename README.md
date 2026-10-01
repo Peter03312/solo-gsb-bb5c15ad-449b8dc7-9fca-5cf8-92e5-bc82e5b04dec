@@ -3,7 +3,8 @@
 在浏览器中上传植物显微切片图片，完成像素—微米定标后，圈选多个细胞的外轮廓及其孔洞，
 自动计算**扣除孔洞后的净面积（μm²）**与**含孔洞边界的总周长（μm）**；
 还可圈定多个**命名取样视野**（外环 + 可选孔洞），按细胞净区域质心统计各视野的
-**细胞数、净面积（mm²）与每 mm² 细胞密度**；
+**细胞数、净面积（mm²）与每 mm² 细胞密度**；并可对**同一草稿/报告内至少两个视野**
+按其净区域**几何并集**查看**合并统计**（并集面积、去重细胞数、密度与计入净面积总和）；
 可发布为不可变报告、导出**标注 PNG**、**测量 CSV** 与**视野统计 CSV**；
 并支持把一份已发布报告的全部细胞经**三点对应仿射变换**整体迁移到另一张切片草稿。
 
@@ -79,11 +80,25 @@
       按**目标标尺**重算测量值，取样视野统计随细胞变动自动重算；
     - **来源报告、目标原有细胞与标尺、全部已发布报告均不改变**；
       预览与提交使用同一变换与校验，任何失败**整批不写入**。
+11. **多视野合并统计（几何并集）**：在**切片编辑页**与**已发布报告页**，勾选
+    **同一草稿/报告内至少两个**取样视野，即可查看所选视野的合并统计。
+    - 面积按所选视野**净区域（外环扣除孔洞）的几何并集**精确计算（重叠区域只算一次），
+      视野贴合处不留缝隙；
+    - 归属规则：细胞以其**扣除孔洞后的净区域质心**判定，质心**严格位于并集内部**才计入——
+      两个视野的贴合接缝属于并集内部（计入），并集**外边界不计入**，全部视野共有的孔洞
+      不属于并集（不计入）；一个视野孔洞内但被另一视野覆盖的点仍属于并集；
+    - **同一细胞只计一次**（即使它落在多个视野重叠区域）；净面积为零的细胞没有良定义质心，不计入；
+    - 展示**并集面积（mm²）、细胞数、每 mm² 细胞密度、计入细胞的净面积总和（mm²）**；
+      **未定标**时保留细胞数，面积/密度/总和显示**「待定标」**；
+    - 草稿侧为**只读实时计算**：细胞轮廓、视野或标尺改变后按当前数据重算；
+      报告侧**只读取发布时冻结数据**，草稿后续改动不影响结果；
+    - **选择不足两个视野、视野标识重复、视野标识不存在**都会被明确拒绝（HTTP 400）；
+      合并统计**不写库、不改变**任何原有逐视野统计与报告内容。
 
 ## 配置项
 
-本轮（细胞迁移）**未引入新的环境变量、外部依赖或数据库表结构变更**（迁移只向草稿的
-`cells` JSON 追加细胞），沿用既有配置；旧数据库无需任何迁移即可直接使用。
+本轮（多视野合并统计）**未引入新的环境变量、外部依赖或数据库表结构变更**（合并统计为
+只读实时计算，不写库），沿用既有配置；旧数据库无需任何迁移即可直接使用。
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -149,8 +164,12 @@ npm start
    未定标时面积/密度显示「待定标」，细胞数仍可查看；
 9. 点击 **发布当前草稿为报告**，在「已发布报告」中查看冻结快照，
    报告页展示与「视野统计 CSV」完全一致的冻结视野统计，并可导出 PNG / 测量 CSV / 视野统计 CSV；
-10. 需要对比两份报告时，进入 **报告比较**（流程不变，比较仍只读取冻结的细胞测量值）；
-11. 需要把已发布报告的细胞搬到另一张切片时，在目标切片的编辑页打开 **⑥ 细胞迁移**：
+10. 需要合并多个视野时，在编辑器 **⑥ 多视野合并统计**（或报告页「多视野合并统计」）面板
+    **勾选至少两个视野**：立即给出所选视野净区域**几何并集**的净面积 mm²、细胞数、
+    每 mm² 密度与计入细胞净面积总和；重叠处细胞只计一次，贴合接缝计入、并集外边界不计入；
+    草稿侧随轮廓/视野/标尺实时重算，报告侧只显示发布时冻结结果；勾选不足两个或标识异常会明确拒绝；
+11. 需要对比两份报告时，进入 **报告比较**（流程不变，比较仍只读取冻结的细胞测量值）；
+12. 需要把已发布报告的细胞搬到另一张切片时，在目标切片的编辑页打开 **⑦ 细胞迁移**：
     - 在下拉框选择**来源报告**（已发布），左侧出现来源快照；
     - 在来源快照上**依次单击 3 个对应点**（编号 1–3，自动连线提示顺序）；
     - 点 **🎯 标目标点工具**，在右侧大图上按**相同顺序**单击 3 个对应点
@@ -173,6 +192,7 @@ npm start
 │   ├── db.js          # SQLite 表结构与初始化（启动自动建表 + 旧库幂等补 fields 列）
 │   ├── geometry.js    # 几何校验、面积/周长、净区域质心（服务端最终校验）
 │   ├── fields.js      # 取样视野：质心归属、mm²/密度统计、未定标“待定标”
+│   ├── merge-stats.js # 多视野几何并集（平面排列精确面积）+ 严格并集内部判定 + 合并统计（服务端/页端共用 UMD）
 │   ├── compare.js     # 报告比较：手动一对一配对校验、冻结值差值/变化率视图
 │   ├── transfer.js    # 细胞迁移：三点对应点校验、仿射求解、整批映射+逐细胞校验
 │   ├── render.js      # sharp + SVG 渲染标注 PNG
@@ -180,6 +200,7 @@ npm start
 ├── public/            # 前端（原生 JS，无需构建）
 ├── test-geometry.js   # 几何自测（npm test）
 ├── test-fields.js     # 视野密度统计自测（npm test）
+├── test-merge.js      # 多视野合并统计自测（npm test）
 ├── test-compare.js    # 报告比较自测（npm test）
 ├── test-transfer.js   # 细胞迁移自测（npm test）
 └── data/              # 运行后生成：app.db、images/、snapshots/
@@ -301,6 +322,110 @@ curl -s -OJ http://localhost:8080/api/reports/$REPORT_ID/field-csv
 
 原 `GET /api/reports/:id/csv`（测量 CSV，μm²）、`/png`、批量导出与报告比较结果
 **保持原义不变**；视野统计是独立 CSV，不混入测量 CSV。
+
+## 多视野合并统计 HTTP 接口（几何并集，只读）
+
+在**同一草稿**或**同一报告**内选择**至少两个**取样视野，按所选视野净区域
+（外环扣除孔洞）的**几何并集**返回合并统计。两个接口都是**只读**的，不写库、
+不改变任何逐视野统计与报告内容；请求体均为 `{ "fieldIds": string[] }`，
+标识为 `GET /api/images/:id` / `GET /api/reports/:id` 返回的视野 `id`。
+
+| 方法与路径 | 说明 |
+| --- | --- |
+| `POST /api/images/:id/field-merge` | 草稿合并统计：按**当前**细胞轮廓、视野与标尺实时计算；草稿不存在 → 404 |
+| `POST /api/reports/:id/field-merge` | 报告合并统计：只读取**发布时冻结**的 fields/cells/calib；报告不存在 → 404 |
+
+错误语义（两个接口一致）：
+
+- `fieldIds` 不是数组 / 含非字符串 → **400**；
+- 选择**不足 2 个**视野 → **400**（指明当前个数）；
+- 视野标识**重复** → **400**（指明重复的 id）；
+- 视野标识在该草稿/报告内**不存在**（草稿视野被删除/改动后旧 id 失效）→ **400**（指明不存在的 id）。
+
+成功响应示例（草稿；报告侧 `scope:"report"` 且返回 `draftVersion`）：
+
+```json
+{
+  "scope": "draft",
+  "imageId": "7ca3…",
+  "version": 4,
+  "calibrated": true,
+  "stats": {
+    "kind": "field-merge",
+    "fieldCount": 2,
+    "fieldIds": ["f1", "f2"],
+    "fieldNames": ["视野1", "视野2"],
+    "areaPx": 10000,
+    "areaMm2": 0.01,
+    "cellCount": 3,
+    "countedCellKeys": ["cellA", "cellB", "#2"],
+    "countedCells": [
+      { "key": "cellA", "name": "Alpha" },
+      { "key": "cellB", "name": "Beta" }
+    ],
+    "countedCellAreaPx": 320,
+    "countedCellAreaMm2": 0.0032,
+    "densityPerMm2": 300,
+    "areaText": "0.01",
+    "densityText": "300",
+    "countedCellAreaText": "0.0032",
+    "calibrated": true
+  }
+}
+```
+
+- 并集面积按平面排列（半边缘遍历）精确计算：重叠/共线/旋转多边形均为真实几何并集，
+  非面积简单加减；`areaText` 保留 6 位小数、`densityText` 4 位，与逐视野统计同一规则；
+- **未定标**（草稿未完成标尺定标）时 `areaMm2`/`densityPerMm2`/`countedCellAreaMm2` 为
+  `null`，三个展示文本统一为 **`"待定标"`**，`cellCount` 与 `countedCellKeys` 照常给出；
+- 细胞以净区域质心**严格位于并集内部**才计入，`countedCellKeys` 为计入细胞标识
+  （细胞 `id`，历史无 id 时为 `#序号`），同一细胞在并集中只出现一次。
+
+curl 示例（草稿 `IMG`；报告把 `/api/images/$IMG/field-merge` 换成
+`/api/reports/$RID/field-merge`）：
+
+```bash
+# 合并两个贴合视野（并集 = 两视野净区域几何并集）
+curl -s -X POST http://localhost:8080/api/images/$IMG/field-merge \
+  -H 'Content-Type: application/json' \
+  -d '{"fieldIds":["f1","f2"]}' | jq '.stats |
+    {fieldNames, areaMm2, cellCount, densityPerMm2, countedCellAreaMm2, countedCellKeys}'
+
+# 不足两个 / 重复 / 不存在 → 400
+curl -s -X POST http://localhost:8080/api/images/$IMG/field-merge \
+  -H 'Content-Type: application/json' -d '{"fieldIds":["f1"]}'
+# -> { "error": "合并统计至少需要选择 2 个同一草稿/报告内的取样视野（当前选择 1 个），请求被拒绝" }
+```
+
+Node.js 示例（无第三方依赖；草稿改动后按最新数据重算，报告始终冻结）：
+
+```js
+const base = 'http://localhost:8080';
+
+async function mergeFields(pathKind, id, fieldIds) {
+  const res = await fetch(`${base}/api/${pathKind}/${id}/field-merge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fieldIds })
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const e = new Error(body.error || `HTTP ${res.status}`);
+    e.status = res.status;
+    throw e; // 400：不足两个/重复/不存在；404：草稿或报告不存在
+  }
+  const s = body.stats;
+  console.log(`合并 ${s.fieldCount} 个视野（${s.fieldNames.join('、')}）`);
+  console.log(`并集净面积 ${s.areaText} mm² · 细胞 ${s.cellCount} · ` +
+              `密度 ${s.densityText} 个/mm² · 计入净面积总和 ${s.countedCellAreaText} mm²`);
+  return body;
+}
+
+// 草稿：随轮廓/视野/标尺改变按当前数据重算
+await mergeFields('images', process.env.IMG, ['f1', 'f2']);
+// 报告：只读取发布时冻结数据
+await mergeFields('reports', process.env.RID, ['f1', 'f2']);
+```
 
 ## 细胞迁移 HTTP 接口（三点对应仿射变换）
 
@@ -431,10 +556,12 @@ for (const s of result.image.fieldStats) {
 | `PUT /api/images/:id/calibration` | 定标/重定标（带 `version`，过期 409）；视野统计随新比例重算 |
 | `PUT /api/images/:id/contours` | 整批保存细胞轮廓（带 `version`；非法 400 整批不生效；过期 409） |
 | **`PUT /api/images/:id/fields`** | **整批保存取样视野（带 `version`；非法 400 整批不生效；过期 409）** |
+| **`POST /api/images/:id/field-merge`** | **多视野合并统计（只读，按草稿当前数据实时计算；不足两个/重复/不存在 400）** |
 | `POST /api/images/:id/publish` | 发布冻结（含视野与统计；带 `version`，过期 409） |
 | **`POST /api/images/:id/migrate/preview`** | **迁移预览：三点对应仿射映射 + 逐细胞校验（不写入；返回预览时目标草稿版本）** |
 | **`POST /api/images/:id/migrate`** | **确认迁移（带预览时版本，过期 409；任一校验失败 400 整批不写入）** |
 | `GET /api/reports` / `GET /api/reports/:id` | 报告列表 / 冻结详情（旧报告 `fields` 为空列表） |
+| **`POST /api/reports/:id/field-merge`** | **报告内多视野合并统计（只读，只取发布时冻结数据；不足两个/重复/不存在 400）** |
 | `GET /api/reports/:id/file` / `/png` | 发布时图片快照 / 标注 PNG |
 | `GET /api/reports/:id/csv` | 测量 CSV（μm²，原义不变） |
 | **`GET /api/reports/:id/field-csv`** | **视野统计 CSV（mm²，与报告页同一冻结结果）** |

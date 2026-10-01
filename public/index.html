@@ -96,7 +96,17 @@
         </div>
 
         <div class="panel">
-          <h3>⑥ 细胞迁移（从已发布报告）</h3>
+          <h3>⑥ 多视野合并统计（草稿）</h3>
+          <p class="hint">勾选<b>同一草稿内至少两个</b>视野，按所选视野净区域（外环扣除孔洞）的
+            <b>几何并集</b>统计：并集面积 mm²、细胞数、每 mm² 密度、计入细胞净面积总和 mm²。
+            细胞以净区域质心判定，<b>严格位于并集内部</b>才计入，同一细胞只计一次；
+            视野贴合接缝属于并集内部，并集外边界与共有孔洞不计入。草稿轮廓/视野/标尺改变后按当前数据实时重算。</p>
+          <div id="merge-field-list" class="merge-field-list"></div>
+          <div id="merge-result" class="merge-result"></div>
+        </div>
+
+        <div class="panel">
+          <h3>⑦ 细胞迁移（从已发布报告）</h3>
           <p class="hint">把一份<b>已发布报告</b>的全部细胞按仿射变换迁移到当前草稿：
             选择来源报告后，在来源快照与右侧大图上按<b>相同顺序</b>各标记 3 个<b>不共线</b>对应点，
             预览逐个校验全部通过后才能确认迁移。迁移只把细胞<b>追加</b>到当前草稿
@@ -121,7 +131,7 @@
         </div>
 
         <div class="panel">
-          <h3>⑦ 发布报告</h3>
+          <h3>⑧ 发布报告</h3>
           <p class="hint">发布会冻结当时的图片、标尺、细胞轮廓、<b>取样视野与密度统计</b>；之后修改草稿不影响已发布报告。</p>
           <button id="publish-btn" class="primary wide">发布当前草稿为报告</button>
         </div>
@@ -222,6 +232,14 @@
           <div id="rp-field-wrap"></div>
         </div>
         <div class="panel">
+          <h3>多视野合并统计（发布时冻结）</h3>
+          <p class="hint">勾选<b>本报告内至少两个</b>视野，按所选视野净区域（外环扣除孔洞）的<b>几何并集</b>统计。
+            细胞以净区域质心严格位于并集内部才计入，同一细胞只计一次；
+            结果只读取<b>发布时冻结数据</b>，不随后续草稿变化。</p>
+          <div id="rp-merge-field-list" class="merge-field-list"></div>
+          <div id="rp-merge-result" class="merge-result"></div>
+        </div>
+        <div class="panel">
           <h3>导出</h3>
           <div class="toolbar wrap">
             <a id="rp-png-link" class="btn-like" download>标注 PNG</a>
@@ -238,6 +256,7 @@
   </section>
 
   <script src="/geometry-client.js"></script>
+  <script src="/merge-stats.js"></script>
   <script src="/api.js"></script>
   <script src="/canvas-view.js"></script>
   <script src="/editor.js"></script>

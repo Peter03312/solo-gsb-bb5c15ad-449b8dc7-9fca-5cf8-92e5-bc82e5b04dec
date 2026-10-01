@@ -67,6 +67,22 @@ const API = {
       body: JSON.stringify({ version, title })
     }));
   },
+  // 多视野合并统计：草稿按当前数据实时计算（只读）
+  async mergeDraftFields(id, fieldIds) {
+    return jsonOrThrow(await fetch(`/api/images/${id}/field-merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fieldIds })
+    }));
+  },
+  // 多视野合并统计：报告只读取发布时冻结数据（只读）
+  async mergeReportFields(reportId, fieldIds) {
+    return jsonOrThrow(await fetch(`/api/reports/${reportId}/field-merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fieldIds })
+    }));
+  },
   async listReports() {
     return jsonOrThrow(await fetch('/api/reports'));
   },

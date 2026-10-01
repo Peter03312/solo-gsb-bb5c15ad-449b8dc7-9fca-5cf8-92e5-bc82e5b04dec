@@ -40,6 +40,7 @@ const Editor = {
   view: null,
   tool: 'cell',
   migrate: null,       // 细胞迁移工作状态（见 resetMigration）
+  mergeSelected: null, // 多视野合并统计勾选的视野 id（按 this.fields 顺序）
 
   async open(id) {
     this.imageId = id;
@@ -47,6 +48,7 @@ const Editor = {
     document.getElementById('view-editor').classList.remove('hidden');
     const data = await API.getImage(id);
     await this.applyServerData(data);
+    this.mergeSelected = [];
     this.resetMigration();
     this.loadMigrateReports();
 
@@ -94,6 +96,14 @@ const Editor = {
     this.calibDraft = null;
     if (!this.cells.some((c) => c.id === this.activeCellId)) this.activeCellId = null;
     if (!this.fields.some((f) => f.id === this.activeFieldId)) this.activeFieldId = null;
+    // 合并统计勾选随最新数据保留仍存在的视野（按当前字段顺序去重）
+    if (!Array.isArray(this.mergeSelected)) this.mergeSelected = [];
+    const seenIds = new Set();
+    this.mergeSelected = this.mergeSelected.filter((id) => {
+      if (seenIds.has(id) || !this.fields.some((f) => f.id === id)) return false;
+      seenIds.add(id);
+      return true;
+    });
     if (this.view) this.view.render();
   },
 
@@ -874,8 +884,79 @@ const Editor = {
     document.getElementById('save-fields').disabled = !this.fieldsDirty;
     document.getElementById('tool-hole').disabled = !this.activeCellId;
     document.getElementById('tool-fieldhole').disabled = !this.activeFieldId;
+    this.renderMergePanel(c);
     this.renderMigratePanel();
     this.renderDraftInfo();
+  },
+
+  // ---------- 多视野合并统计（草稿实时） ----------
+
+  toggleMergeField(id, checked) {
+    const set = new Set(this.mergeSelected);
+    if (checked) set.add(id); else set.delete(id);
+    // 按当前字段顺序保存，保证勾选次序稳定
+    this.mergeSelected = this.fields.filter((f) => set.has(f.id)).map((f) => f.id);
+    this.renderMergePanel(this.img.calib);
+  },
+
+  // 本地用与服务端完全相同的 MergeStats 模块实时重算（HTTP API 提供给外部调用）
+  renderMergePanel(calib) {
+    const listEl = document.getElementById('merge-field-list');
+    const resEl = document.getElementById('merge-result');
+    if (!listEl || !resEl) return;
+
+    listEl.innerHTML = '';
+    if (!this.fields.length) {
+      listEl.innerHTML = '<p class="hint">尚无取样视野。圈定并保存至少两个视野后可合并统计。</p>';
+      resEl.innerHTML = '';
+      return;
+    }
+
+    const selSet = new Set(this.mergeSelected);
+    this.fields.forEach((f, i) => {
+      const row = document.createElement('label');
+      row.className = 'merge-row' + (selSet.has(f.id) ? ' active' : '');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = selSet.has(f.id);
+      cb.onchange = () => this.toggleMergeField(f.id, cb.checked);
+      row.appendChild(cb);
+      const name = document.createElement('span');
+      name.innerHTML = `<span style="color:${FIELD_COLOR}">●</span> ${f.name || `视野 ${i + 1}`}${this.fieldsDirty ? ' *' : ''}`;
+      row.appendChild(name);
+      listEl.appendChild(row);
+    });
+
+    const n = this.mergeSelected.length;
+    if (n < 2) {
+      resEl.innerHTML = `<p class="hint">已勾选 <b>${n}</b> 个视野：合并统计至少需要勾选 <b>2</b> 个同一草稿内的视野。</p>`;
+      return;
+    }
+
+    let s;
+    try {
+      const selected = window.MergeStats.resolveMergeSelection(this.fields, this.mergeSelected);
+      s = window.MergeStats.buildMergeStats(selected, this.cells, calib ? calib.scale : null);
+    } catch (e) {
+      resEl.innerHTML = `<p class="merge-error">${e.message}</p>`;
+      return;
+    }
+
+    const names = s.fieldNames.join('、');
+    const counted = (s.countedCells || []).map((c) => c.name || c.key).join('、');
+    resEl.innerHTML = `
+      <table class="measure compact">
+        <tbody>
+          <tr><th>合并视野</th><td>${s.fieldCount} 个（${names}）</td></tr>
+          <tr><th>并集净面积 mm²</th><td>${s.areaText}</td></tr>
+          <tr><th>细胞数</th><td>${s.cellCount}</td></tr>
+          <tr><th>细胞密度 个/mm²</th><td>${s.densityText}</td></tr>
+          <tr><th>计入细胞净面积总和 mm²</th><td>${s.countedCellAreaText}</td></tr>
+        </tbody>
+      </table>
+      <p class="hint">同一细胞在并集中只计一次。计入细胞：${counted || '（无）'}。
+      ${this.fieldsDirty || this.dirty ? '当前含<b>未保存</b>轮廓/视野，结果按本地工作副本实时计算；保存后与服务端一致。' : ''}
+      ${calib ? '' : '当前<b>未定标</b>：细胞数保留，面积/密度/总和显示“待定标”。'}</p>`;
   },
 
   toast(msg, ok = false) {

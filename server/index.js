@@ -11,6 +11,7 @@ const { initDb } = require('./db');
 const geo = require('./geometry');
 const cmp = require('./compare');
 const fieldsSvc = require('./fields');
+const mergeSvc = require('./merge-stats');
 const transfer = require('./transfer');
 const { renderAnnotatedPng } = require('./render');
 const { buildReportCsv, buildCombinedCsv, buildComparisonCsv, buildFieldStatsCsv, streamZip } = require('./exporter');
@@ -24,6 +25,10 @@ const db = initDb(DATA_DIR);
 const app = express();
 app.use(express.json({ limit: '20mb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
+// 合并统计模块为服务端/页端共用的同一份几何实现（UMD），直接按脚本暴露给浏览器
+app.get('/merge-stats.js', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'merge-stats.js'));
+});
 
 const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
@@ -387,6 +392,30 @@ app.put('/api/images/:id/fields', (req, res) => {
   res.json(getImageOr404(img.id));
 });
 
+// ---------- 多视野合并统计（只读；按当前草稿实时计算） ----------
+//
+// 请求体：{ fieldIds: string[] }。至少 2 个、同一草稿内、不重复、必须存在。
+// 不修改任何草稿/报告数据；细胞轮廓、视野或标尺改变后按当前数据重算。
+app.post('/api/images/:id/field-merge', (req, res) => {
+  const img = getImageOr404(req.params.id);
+  if (!img) return res.status(404).json({ error: '图片不存在' });
+  const body = req.body || {};
+  let selected;
+  try {
+    selected = mergeSvc.resolveMergeSelection(img.fields, body.fieldIds);
+  } catch (e) {
+    return badRequest(res, e.message);
+  }
+  const stats = mergeSvc.buildMergeStats(selected, img.cells, img.calib ? img.calib.scale : null);
+  res.json({
+    scope: 'draft',
+    imageId: img.id,
+    version: img.version, // 返回计算时的草稿版本，便于调用方识别是否已是最新数据
+    calibrated: !!img.calib,
+    stats
+  });
+});
+
 // ---------- 发布（乐观并发：携带读取时草稿版本） ----------
 
 app.post('/api/images/:id/publish', (req, res) => {
@@ -451,6 +480,30 @@ app.get('/api/reports/:id', (req, res) => {
   const report = getReportOr404(req.params.id);
   if (!report) return res.status(404).json({ error: '报告不存在' });
   res.json(report);
+});
+
+// ---------- 报告内多视野合并统计（只读；只使用发布时冻结数据） ----------
+//
+// 请求体：{ fieldIds: string[] }。标识必须来自该报告发布时冻结的 fields。
+// 草稿后续的轮廓/视野/标尺改动不影响本接口结果。
+app.post('/api/reports/:id/field-merge', (req, res) => {
+  const report = getReportOr404(req.params.id);
+  if (!report) return res.status(404).json({ error: '报告不存在' });
+  const body = req.body || {};
+  let selected;
+  try {
+    selected = mergeSvc.resolveMergeSelection(report.fields, body.fieldIds);
+  } catch (e) {
+    return badRequest(res, e.message);
+  }
+  const stats = mergeSvc.buildMergeStats(selected, report.cells, report.calib ? report.calib.scale : null);
+  res.json({
+    scope: 'report',
+    reportId: report.id,
+    draftVersion: report.draftVersion,
+    calibrated: !!report.calib,
+    stats
+  });
 });
 
 app.get('/api/reports/:id/file', (req, res) => {

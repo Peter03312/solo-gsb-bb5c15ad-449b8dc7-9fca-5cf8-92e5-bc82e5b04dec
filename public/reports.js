@@ -6,6 +6,8 @@ const Reports = {
   reports: [],
   selected: new Set(),
   detailView: null,
+  mergeReportId: null, // 当前详情报告 id
+  mergeSelected: [],   // 报告内多视野合并统计勾选（冻结视野 id）
 
   async showList() {
     document.getElementById('view-reports').classList.remove('hidden');
@@ -149,6 +151,11 @@ const Reports = {
         <p class="hint">发布时冻结，不随后续草稿变化；与「视野统计 CSV」为同一份结果。</p>`;
     }
 
+    // 多视野合并统计：只使用发布时冻结的 fields/cells/calib
+    this.mergeReportId = r.id;
+    this.mergeSelected = [];
+    this.renderReportMerge(r);
+
     document.getElementById('rp-png-link').href = API.exportPngUrl(r.id);
     document.getElementById('rp-png-link').setAttribute('download', `${r.id}_annotated.png`);
     document.getElementById('rp-csv-link').href = API.exportCsvUrl(r.id);
@@ -170,6 +177,75 @@ const Reports = {
 
   hideDetail() {
     if (this.detailView) this.detailView.destroy(), (this.detailView = null);
+    this.mergeReportId = null;
+    this.mergeSelected = [];
+  },
+
+  // ---------- 多视野合并统计（发布时冻结；页端与服务端共用 MergeStats） ----------
+
+  toggleReportMergeField(report, id, checked) {
+    const set = new Set(this.mergeSelected);
+    if (checked) set.add(id); else set.delete(id);
+    this.mergeSelected = (report.fields || []).filter((f) => set.has(f.id)).map((f) => f.id);
+    this.renderReportMerge(report);
+  },
+
+  renderReportMerge(r) {
+    const listEl = document.getElementById('rp-merge-field-list');
+    const resEl = document.getElementById('rp-merge-result');
+    if (!listEl || !resEl) return;
+    const fields = r.fields || [];
+    listEl.innerHTML = '';
+    if (!fields.length) {
+      listEl.innerHTML = '<p class="hint">本报告发布时未圈定取样视野，无法合并统计。</p>';
+      resEl.innerHTML = '';
+      return;
+    }
+
+    const selSet = new Set(this.mergeSelected);
+    fields.forEach((f, i) => {
+      const row = document.createElement('label');
+      row.className = 'merge-row' + (selSet.has(f.id) ? ' active' : '');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = selSet.has(f.id);
+      cb.onchange = () => this.toggleReportMergeField(r, f.id, cb.checked);
+      row.appendChild(cb);
+      const name = document.createElement('span');
+      name.innerHTML = `<span style="color:#ffd400">●</span> ${f.name || `视野 ${i + 1}`}`;
+      row.appendChild(name);
+      listEl.appendChild(row);
+    });
+
+    const n = this.mergeSelected.length;
+    if (n < 2) {
+      resEl.innerHTML = `<p class="hint">已勾选 <b>${n}</b> 个视野：合并统计至少需要勾选 <b>2</b> 个本报告内的视野。</p>`;
+      return;
+    }
+
+    let s;
+    try {
+      const selected = window.MergeStats.resolveMergeSelection(fields, this.mergeSelected);
+      s = window.MergeStats.buildMergeStats(selected, r.cells || [], r.calib ? r.calib.scale : null);
+    } catch (e) {
+      resEl.innerHTML = `<p class="merge-error">${e.message}</p>`;
+      return;
+    }
+
+    const names = s.fieldNames.join('、');
+    const counted = (s.countedCells || []).map((c) => c.name || c.key).join('、');
+    resEl.innerHTML = `
+      <table class="measure compact">
+        <tbody>
+          <tr><th>合并视野</th><td>${s.fieldCount} 个（${names}）</td></tr>
+          <tr><th>并集净面积 mm²</th><td>${s.areaText}</td></tr>
+          <tr><th>细胞数</th><td>${s.cellCount}</td></tr>
+          <tr><th>细胞密度 个/mm²</th><td>${s.densityText}</td></tr>
+          <tr><th>计入细胞净面积总和 mm²</th><td>${s.countedCellAreaText}</td></tr>
+        </tbody>
+      </table>
+      <p class="hint">同一细胞在并集中只计一次。计入细胞：${counted || '（无）'}。
+      结果只读取<b>发布时冻结数据</b>（发布时草稿 v${r.draftVersion}），不随后续草稿变化。</p>`;
   },
 
   fmt(v) {

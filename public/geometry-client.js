@@ -284,7 +284,7 @@ function clientMeasure(cells, scale) {
 window.ClientGeom = {
   clientValidate, clientMeasure,
   clientValidateFields, clientFieldStats,
-  gArea, gPerimeter, gSelfIntersection, gPointStrictlyInside,
+  gArea, gSignedArea, gPerimeter, gSelfIntersection, gPointStrictlyInside,
   gRingStrictlyInside, gEdges, gSegsTouch, gDupPoint,
   gPointInsideOrOn, gNetCentroid, gPointInFieldNet
 };
